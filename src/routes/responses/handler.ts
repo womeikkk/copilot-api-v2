@@ -2,18 +2,39 @@ import type { Context } from "hono"
 
 import { streamSSE } from "hono/streaming"
 
+import type { AnthropicStreamEventData } from "~/routes/messages/anthropic-types"
+
 import { awaitApproval } from "~/lib/approval"
-import { getConfig, isResponsesApiWebSearchEnabled } from "~/lib/config"
-import { createHandlerLogger, debugJson, debugJsonTail } from "~/lib/logger"
+import {
+  getConfig,
+  isResponsesApiWebSearchEnabled,
+  resolveMappedModel,
+} from "~/lib/config"
+import {
+  createHandlerLogger,
+  debugJson,
+  debugJsonTail,
+  logMappedModel,
+  logRequestModel,
+} from "~/lib/logger"
 import { checkRateLimit } from "~/lib/rate-limit"
 import { state } from "~/lib/state"
 import { generateRequestIdFromPayload, getUUID } from "~/lib/utils"
+import { prepareMessagesApiPayload } from "~/routes/messages/preprocess"
+import { createMessages } from "~/services/copilot/create-messages"
 import {
   createResponses,
   type ResponsesPayload,
   type ResponsesResult,
 } from "~/services/copilot/create-responses"
 
+import {
+  createAnthropicResponsesStreamState,
+  translateAnthropicResponseToResponsesResult,
+  translateAnthropicResponsesStreamStateToResponses,
+  translateAnthropicStreamEventToResponses,
+  translateResponsesPayloadToAnthropicMessages,
+} from "./messages-translation"
 import { createStreamIdTracker, fixStreamIds } from "./stream-id-sync"
 import {
   applyResponsesApiContextManagement,
@@ -29,6 +50,10 @@ export const handleResponses = async (c: Context) => {
   await checkRateLimit(state)
 
   const payload = await c.req.json<ResponsesPayload>()
+  logRequestModel("/v1/responses", payload.model)
+  const requestedModel = payload.model
+  payload.model = resolveMappedModel(payload.model)
+  logMappedModel("/v1/responses", requestedModel, payload.model)
   debugJson(logger, "Responses request payload:", payload)
 
   // not support subagent marker for now , set sessionId = getUUID(requestId)
@@ -53,13 +78,39 @@ export const handleResponses = async (c: Context) => {
   )
   const supportsResponses =
     selectedModel?.supported_endpoints?.includes(RESPONSES_ENDPOINT) ?? false
+  const supportsMessages =
+    selectedModel?.supported_endpoints?.includes("/v1/messages") ?? false
+
+  if (
+    shouldRouteResponsesViaMessagesApi(
+      payload.model,
+      supportsResponses,
+      supportsMessages,
+    )
+  ) {
+    logger.debug(
+      "Routing Responses request through the Messages API for mapped Claude model",
+    )
+
+    if (state.manualApprove) {
+      await awaitApproval()
+    }
+
+    return await handleResponsesViaMessagesApi(c, payload, {
+      requestId,
+      sessionId,
+      selectedModel,
+    })
+  }
 
   if (!supportsResponses) {
     return c.json(
       {
         error: {
           message:
-            "This model does not support the responses endpoint. Please choose a different model.",
+            supportsMessages ?
+              `Resolved model '${payload.model}' does not support the responses endpoint. It supports '/v1/messages', so either call '/v1/messages' or change modelMappings.`
+            : "This model does not support the responses endpoint. Please choose a different model.",
           type: "invalid_request_error",
         },
       },
@@ -67,24 +118,109 @@ export const handleResponses = async (c: Context) => {
     )
   }
 
-  applyResponsesApiContextManagement(
-    payload,
-    selectedModel?.capabilities.limits.max_prompt_tokens,
-  )
-
-  debugJson(logger, "Translated Responses payload:", payload)
-
-  const { vision, initiator } = getResponsesRequestOptions(payload)
-
   if (state.manualApprove) {
     await awaitApproval()
   }
 
+  return await handleNativeResponsesApi(c, payload, {
+    requestId,
+    sessionId,
+    maxPromptTokens: selectedModel?.capabilities.limits.max_prompt_tokens,
+  })
+}
+
+const handleResponsesViaMessagesApi = async (
+  c: Context,
+  payload: ResponsesPayload,
+  options: {
+    requestId: string
+    sessionId: string
+    selectedModel: NonNullable<typeof state.models>["data"][number] | undefined
+  },
+) => {
+  const anthropicPayload = translateResponsesPayloadToAnthropicMessages(payload)
+
+  prepareMessagesApiPayload(anthropicPayload, options.selectedModel)
+  debugJson(
+    logger,
+    "Translated Responses payload to Messages payload:",
+    anthropicPayload,
+  )
+
+  const response = await createMessages(anthropicPayload, undefined, {
+    requestId: options.requestId,
+    sessionId: options.sessionId,
+  })
+
+  if (isAsyncIterable(response)) {
+    logger.debug("Forwarding Claude-backed Responses stream")
+    return streamSSE(c, async (stream) => {
+      const streamState = createAnthropicResponsesStreamState(payload)
+
+      for await (const event of response) {
+        const data = event.data ?? ""
+        if (!data || data === "[DONE]") {
+          continue
+        }
+
+        let parsed: unknown
+        try {
+          parsed = JSON.parse(data)
+        } catch {
+          continue
+        }
+
+        const translatedEvents = translateAnthropicStreamEventToResponses(
+          parsed as AnthropicStreamEventData,
+          streamState,
+        )
+
+        for (const translatedEvent of translatedEvents) {
+          await stream.writeSSE({
+            event: translatedEvent.type,
+            data: JSON.stringify(translatedEvent),
+          })
+        }
+      }
+
+      for (const translatedEvent of translateAnthropicResponsesStreamStateToResponses(
+        streamState,
+      )) {
+        await stream.writeSSE({
+          event: translatedEvent.type,
+          data: JSON.stringify(translatedEvent),
+        })
+      }
+    })
+  }
+
+  debugJsonTail(logger, "Claude-backed Messages result:", {
+    value: response,
+    tailLength: 400,
+  })
+
+  return c.json(translateAnthropicResponseToResponsesResult(response, payload))
+}
+
+const handleNativeResponsesApi = async (
+  c: Context,
+  payload: ResponsesPayload,
+  options: {
+    requestId: string
+    sessionId: string
+    maxPromptTokens?: number
+  },
+) => {
+  applyResponsesApiContextManagement(payload, options.maxPromptTokens)
+
+  debugJson(logger, "Translated Responses payload:", payload)
+
+  const { vision, initiator } = getResponsesRequestOptions(payload)
   const response = await createResponses(payload, {
     vision,
     initiator,
-    requestId,
-    sessionId: sessionId,
+    requestId: options.requestId,
+    sessionId: options.sessionId,
   })
 
   if (isStreamingRequested(payload) && isAsyncIterable(response)) {
@@ -115,6 +251,18 @@ export const handleResponses = async (c: Context) => {
     tailLength: 400,
   })
   return c.json(response as ResponsesResult)
+}
+
+const shouldRouteResponsesViaMessagesApi = (
+  model: string,
+  supportsResponses: boolean,
+  supportsMessages: boolean,
+): boolean => {
+  return (
+    !supportsResponses
+    && supportsMessages
+    && model.toLowerCase().includes("claude")
+  )
 }
 
 const isAsyncIterable = <T>(value: unknown): value is AsyncIterable<T> =>

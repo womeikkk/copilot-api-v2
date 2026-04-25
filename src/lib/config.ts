@@ -8,6 +8,7 @@ export interface AppConfig {
     apiKeys?: Array<string>
   }
   providers?: Record<string, ProviderConfig>
+  modelMappings?: Record<string, string>
   extraPrompts?: Record<string, string>
   smallModel?: string
   responsesApiContextManagementModels?: Array<string>
@@ -82,6 +83,7 @@ const defaultConfig: AppConfig = {
     apiKeys: [],
   },
   providers: {},
+  modelMappings: {},
   extraPrompts: {
     "gpt-5-mini": gpt5ExplorationPrompt,
     "gpt-5.3-codex": gpt5CommentaryPrompt,
@@ -213,6 +215,12 @@ export function getConfig(): AppConfig {
 export function getExtraPromptForModel(model: string): string {
   const config = getConfig()
   return config.extraPrompts?.[model] ?? ""
+}
+
+export function resolveMappedModel(model: string): string {
+  const config = getConfig()
+  const mappedModel = config.modelMappings?.[model]?.trim()
+  return mappedModel || model
 }
 
 export function getSmallModel(): string {

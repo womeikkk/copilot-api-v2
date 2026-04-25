@@ -5,6 +5,7 @@ import type { AnthropicMessagesPayload } from "../src/routes/messages/anthropic-
 
 const actualStateModule = await import("../src/lib/state")
 const actualConfigModule = await import("../src/lib/config")
+const actualLoggerModule = await import("../src/lib/logger")
 const actualModelsModule = await import("../src/lib/models")
 const actualRateLimitModule = await import("../src/lib/rate-limit")
 const actualUtilsModule = await import("../src/lib/utils")
@@ -16,6 +17,7 @@ const state = {
 }
 
 let messagesApiEnabled = true
+let resolveMappedModelImpl = (model: string) => model
 type SelectedModel = {
   id: string
   supported_endpoints?: Array<string>
@@ -29,6 +31,8 @@ type FlowCallOptions = {
 }
 
 let selectedModel: SelectedModel | undefined
+const logRequestModel = mock(() => {})
+const logMappedModel = mock(() => {})
 
 const findEndpointModel = mock((_: string) => selectedModel)
 const handleWithMessagesApi = mock(
@@ -65,6 +69,12 @@ await mock.module("~/lib/config", () => ({
   ...actualConfigModule,
   getSmallModel: () => "small-model",
   isMessagesApiEnabled: () => messagesApiEnabled,
+  resolveMappedModel: (model: string) => resolveMappedModelImpl(model),
+}))
+await mock.module("~/lib/logger", () => ({
+  ...actualLoggerModule,
+  logMappedModel,
+  logRequestModel,
 }))
 await mock.module("~/lib/models", () => ({
   ...actualModelsModule,
@@ -100,12 +110,15 @@ beforeEach(() => {
   state.manualApprove = false
   state.verbose = false
   messagesApiEnabled = true
+  resolveMappedModelImpl = (model: string) => model
   selectedModel = undefined
 
   findEndpointModel.mockClear()
   handleWithMessagesApi.mockClear()
   handleWithResponsesApi.mockClear()
   handleWithChatCompletions.mockClear()
+  logMappedModel.mockClear()
+  logRequestModel.mockClear()
 })
 
 describe("messages handler orchestration", () => {
@@ -183,6 +196,10 @@ describe("messages handler orchestration", () => {
     expect(handleWithMessagesApi).toHaveBeenCalledTimes(1)
     expect(handleWithResponsesApi).not.toHaveBeenCalled()
     expect(handleWithChatCompletions).not.toHaveBeenCalled()
+    expect(logRequestModel).toHaveBeenCalledWith(
+      "/v1/messages",
+      "original-model",
+    )
 
     const [, forwardedPayload] = handleWithMessagesApi.mock.calls[0]
     expect(forwardedPayload.model).toBe("messages-model")
@@ -208,6 +225,36 @@ describe("messages handler orchestration", () => {
     expect(handleWithMessagesApi).not.toHaveBeenCalled()
     expect(handleWithResponsesApi).toHaveBeenCalledTimes(1)
     expect(handleWithChatCompletions).not.toHaveBeenCalled()
+  })
+
+  test("applies configured model mappings before endpoint selection", async () => {
+    resolveMappedModelImpl = (model) =>
+      model === "gpt-5" ? "claude-opus-4.6" : model
+    selectedModel = {
+      id: "claude-opus-4.6",
+      supported_endpoints: ["/v1/messages"],
+    }
+
+    const app = createApp()
+    const response = await app.request("/", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(createPayload({ model: "gpt-5" })),
+    })
+
+    expect(response.status).toBe(200)
+    expect(await response.text()).toBe("messages")
+    expect(findEndpointModel).toHaveBeenCalledWith("claude-opus-4.6")
+    expect(logMappedModel).toHaveBeenCalledWith(
+      "/v1/messages",
+      "gpt-5",
+      "claude-opus-4.6",
+    )
+
+    const [, forwardedPayload] = handleWithMessagesApi.mock.calls[0]
+    expect(forwardedPayload.model).toBe("claude-opus-4.6")
   })
 
   test("falls back to the Chat Completions flow when no endpoint matches", async () => {

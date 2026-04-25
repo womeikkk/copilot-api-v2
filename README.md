@@ -300,11 +300,15 @@ The following command line options are available for the `start` command:
         }
       }
     },
+    "modelMappings": {
+      "gpt-5": "claude-opus-4.6"
+    },
     "extraPrompts": {
       "gpt-5-mini": "<built-in exploration prompt>",
       "gpt-5.3-codex": "<built-in commentary prompt>",
       "gpt-5.4-mini": "<built-in commentary prompt>",
-      "gpt-5.4": "<built-in commentary prompt>"
+      "gpt-5.4": "<built-in commentary prompt>",
+      "gpt-5.5": "<built-in commentary prompt>"
     },
     "smallModel": "gpt-5-mini",
     "responsesApiContextManagementModels": [],
@@ -312,7 +316,8 @@ The following command line options are available for the `start` command:
       "gpt-5-mini": "low",
       "gpt-5.3-codex": "xhigh",
       "gpt-5.4-mini": "xhigh",
-      "gpt-5.4": "xhigh"
+      "gpt-5.4": "xhigh",
+      "gpt-5.5": "xhigh"
     },
     "useFunctionApplyPatch": true,
     "useMessagesApi": true,
@@ -320,6 +325,7 @@ The following command line options are available for the `start` command:
   }
   ```
 - **auth.apiKeys:** API keys used for request authentication. Supports multiple keys for rotation. Requests can authenticate with either `x-api-key: <key>` or `Authorization: Bearer <key>`. If empty or omitted, authentication is disabled.
+- **modelMappings:** Exact-match map of `requested model -> upstream model`. When a request arrives, the server checks this map first and rewrites the model only if a matching key exists; otherwise the original model is forwarded unchanged. This is useful for aliasing unsupported client-side defaults such as `gpt-5` to a model you actually have, for example `claude-opus-4.6` or `gpt-5.4`. Note that mapping across endpoint families still respects endpoint compatibility: if you map a `/v1/responses` request to a Claude model that only supports `/v1/messages`, the request will still be rejected with a clearer error telling you to switch endpoints or adjust the mapping.
 - **extraPrompts:** Map of `model -> prompt` appended to the first system prompt when translating Anthropic-style requests to Copilot. Use this to inject guardrails or guidance per model. Missing default entries are auto-added without overwriting your custom prompts. The built-in prompts for `gpt-5.3-codex` and `gpt-5.4` enable phase-aware commentary, which lets the model emit a short user-facing progress update before tools or deeper reasoning.
 - **providers:** Global upstream provider map. Each provider key (for example `custom`) becomes a route prefix (`/custom/v1/messages`). Currently only `type: "anthropic"` is supported.
   - `enabled` defaults to `true` if omitted.

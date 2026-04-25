@@ -207,6 +207,24 @@ export const debugJsonTail = (
   debugLazy(logger, () => [label, JSON.stringify(value).slice(-tailLength)])
 }
 
+export const logRequestModel = (endpoint: string, model: string): void => {
+  consola.log(`--> [${endpoint}] model: ${model}`)
+}
+
+export const logMappedModel = (
+  endpoint: string,
+  requestedModel: string,
+  resolvedModel: string,
+): void => {
+  if (requestedModel === resolvedModel) {
+    return
+  }
+
+  consola.log(
+    `==> [${endpoint}] model mapped: ${requestedModel} -> ${resolvedModel}`,
+  )
+}
+
 export const createHandlerLogger = (name: string): ConsolaInstance => {
   const sanitizedName = sanitizeName(name)
   const instance = consola.withTag(name)

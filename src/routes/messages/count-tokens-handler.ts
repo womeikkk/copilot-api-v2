@@ -2,7 +2,11 @@ import type { Context } from "hono"
 
 import consola from "consola"
 
-import { getAnthropicApiKey, getClaudeTokenMultiplier } from "~/lib/config"
+import {
+  getAnthropicApiKey,
+  getClaudeTokenMultiplier,
+  resolveMappedModel,
+} from "~/lib/config"
 import { getTokenCount } from "~/lib/tokenizer"
 
 import { findEndpointModel } from "../../lib/models"
@@ -64,6 +68,7 @@ async function countTokensViaAnthropic(
 export async function handleCountTokens(c: Context) {
   try {
     const anthropicPayload = await c.req.json<AnthropicMessagesPayload>()
+    anthropicPayload.model = resolveMappedModel(anthropicPayload.model)
 
     // Try Anthropic's real endpoint first (Claude models only)
     const anthropicResult = await countTokensViaAnthropic(c, anthropicPayload)

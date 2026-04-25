@@ -304,11 +304,15 @@ Copilot API 现在使用子命令结构，主要命令包括：
         }
       }
     },
+    "modelMappings": {
+      "gpt-5": "claude-opus-4.6"
+    },
     "extraPrompts": {
       "gpt-5-mini": "<built-in exploration prompt>",
       "gpt-5.3-codex": "<built-in commentary prompt>",
       "gpt-5.4-mini": "<built-in commentary prompt>",
-      "gpt-5.4": "<built-in commentary prompt>"
+      "gpt-5.4": "<built-in commentary prompt>",
+      "gpt-5.5": "<built-in commentary prompt>"
     },
     "smallModel": "gpt-5-mini",
     "responsesApiContextManagementModels": [],
@@ -316,7 +320,8 @@ Copilot API 现在使用子命令结构，主要命令包括：
       "gpt-5-mini": "low",
       "gpt-5.3-codex": "xhigh",
       "gpt-5.4-mini": "xhigh",
-      "gpt-5.4": "xhigh"
+      "gpt-5.4": "xhigh",
+      "gpt-5.5": "xhigh"
     },
     "useFunctionApplyPatch": true,
     "useMessagesApi": true,
@@ -324,6 +329,7 @@ Copilot API 现在使用子命令结构，主要命令包括：
   }
   ```
 - **auth.apiKeys：** 用于请求认证的 API key。支持多个 key 轮换使用。请求可通过 `x-api-key: <key>` 或 `Authorization: Bearer <key>` 进行认证。若为空或省略，则禁用认证。
+- **modelMappings：** 精确匹配的 `请求模型 -> 上游模型` 映射表。请求到达后，服务端会先查这个映射；只有命中键名时才会改写模型，否则保持原样透传。它很适合把客户端内置但你实际上没有的模型名重定向到你现有的模型，例如把 `gpt-5` 指到 `claude-opus-4.6` 或 `gpt-5.4`。需要注意的是，跨接口族的映射依然要遵守端点兼容性：如果你把 `/v1/responses` 请求映射到只支持 `/v1/messages` 的 Claude 模型，请求仍会被拒绝，但现在会返回更明确的错误，提示你改用 `/v1/messages` 或调整映射。
 - **extraPrompts：** `model -> prompt` 的映射。把 Anthropic 风格请求翻译给 Copilot 时，会将其附加到第一条 system prompt 后面。你可以借此为不同模型注入护栏或指引。缺失的默认项会自动补齐，但不会覆盖你自定义的 prompt。内置的 `gpt-5.3-codex` 和 `gpt-5.4` prompt 会启用带阶段感知的 commentary，让模型在工具调用或更深层推理前先发出简短的用户可见进度说明。
 - **providers：** 全局上游 provider 映射。每个 provider key（例如 `custom`）都会变成一个路由前缀（`/custom/v1/messages`）。目前仅支持 `type: "anthropic"`。
   - `enabled`：可选，若省略则默认为 `true`。

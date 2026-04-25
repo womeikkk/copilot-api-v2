@@ -4,8 +4,17 @@ import type { Model } from "~/services/copilot/get-models"
 
 import { awaitApproval } from "~/lib/approval"
 import { COMPACT_REQUEST } from "~/lib/compact"
-import { getSmallModel, isMessagesApiEnabled } from "~/lib/config"
-import { createHandlerLogger, debugJson } from "~/lib/logger"
+import {
+  getSmallModel,
+  isMessagesApiEnabled,
+  resolveMappedModel,
+} from "~/lib/config"
+import {
+  createHandlerLogger,
+  debugJson,
+  logMappedModel,
+  logRequestModel,
+} from "~/lib/logger"
 import { findEndpointModel } from "~/lib/models"
 import { checkRateLimit } from "~/lib/rate-limit"
 import { state } from "~/lib/state"
@@ -31,6 +40,10 @@ export async function handleCompletion(c: Context) {
   await checkRateLimit(state)
 
   const anthropicPayload = await c.req.json<AnthropicMessagesPayload>()
+  logRequestModel("/v1/messages", anthropicPayload.model)
+  const requestedModel = anthropicPayload.model
+  anthropicPayload.model = resolveMappedModel(anthropicPayload.model)
+  logMappedModel("/v1/messages", requestedModel, anthropicPayload.model)
   debugJson(logger, "Anthropic request payload:", anthropicPayload)
 
   sanitizeIdeTools(anthropicPayload)
